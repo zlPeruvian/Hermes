@@ -1,7 +1,0 @@
-HERMES - paquete para GitHub Pages y PWABuilder
-1. Crea un repositorio nuevo en GitHub (por ejemplo: hermes).
-2. Sube TODO el contenido de esta carpeta (index.html, sw.js, manifest.webmanifest, icons, .nojekyll).
-3. Settings > Pages > Branch: main, carpeta / (root) > Save.
-4. Espera 1 o 2 minutos. Tu enlace sera https://TU-USUARIO.github.io/hermes/
-5. Abre ese enlace en el celular una vez con internet, para que guarde las librerias.
-6. En pwabuilder.com pega el enlace > Package for stores > Android > descarga el APK/AAB.
