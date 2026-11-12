@@ -158,7 +158,8 @@ label.f{display:block;font-size:14px;color:var(--muted);margin:16px 0 6px}
 .vscroll{flex:1;overflow:auto;position:relative;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:8px 0}
 .vpage{position:relative;margin:0 auto 8px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25)}
 .vpage canvas{display:block}
-.textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;text-align:initial}
+.vpage,.textLayer{-webkit-text-size-adjust:none;text-size-adjust:none}
+.textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;text-align:initial;font-size-adjust:none}
 .textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
 .textLayer ::selection{background:rgba(47,75,198,.35)}
 .vmsg{padding:24px;text-align:center}
@@ -237,8 +238,8 @@ mark.hl{background:rgba(255,214,0,.45);color:inherit;border-radius:2px;padding:0
 var TIPOS=['Textual','Paráfrasis','Idea propia'];
 var PRIOS=['1-Alta','2-Media','3-Baja'];
 var ESTADOS_LECT=['Por leer','Leyendo','Leído','Consulta parcial'];
-var FORMATOS=['PDF','Ebook','Físico'];
-var TIPOS_OBRA=['Libro','Capítulo','Artículo','Tesis','Otro'];
+var FORMATOS=['PDF','Ebook','Físico','Web'];
+var TIPOS_OBRA=['Libro','Capítulo','Artículo','Tesis','Página web','Otro'];
 var ESTADOS_PROY=['Activo','Pausado','Terminado'];
 var $=function(s,el){return (el||document).querySelector(s)};
 var $$=function(s,el){return Array.prototype.slice.call((el||document).querySelectorAll(s))};
@@ -383,7 +384,8 @@ function citaLista(f){
 }
 function referencia(l){
   var a=l.autor||l.apellido||'';
-  return [a,l.anio?'('+l.anio+').':'(s. f.).',l.titulo?l.titulo+'.':'',l.editorial?l.editorial+'.':''].filter(Boolean).join(' ').replace(/\.\./g,'.');
+  var url=l.url?(l.acceso?'Recuperado el '+String(l.acceso).split('-').reverse().join('/')+', de ':'Recuperado de ')+l.url:'';
+  return [a,l.anio?'('+l.anio+').':'(s. f.).',l.titulo?l.titulo+'.':'',l.editorial?l.editorial+'.':'',url].filter(Boolean).join(' ').replace(/\.\./g,'.');
 }
 function genClave(apellido,anio,excludeId){
   var base=(String(apellido||'').trim().split(/[\s,]+/)[0]||'Autor')+(anio||'sf');var c=base;var i=0;
@@ -393,7 +395,7 @@ function genClave(apellido,anio,excludeId){
 }
 function parseTemas(v){var seen={},out=[];String(v||'').split(/[,;]/).forEach(function(t){t=t.trim().toLowerCase();if(t&&!seen[t]){seen[t]=1;out.push(t)}});return out}
 function usoDe(f,pid){return (f.usos||[]).find(function(u){return u.p===pid})}
-function libroHay(l){return norm([l.clave,l.apellido,l.autor,l.titulo,l.editorial,l.anio,(l.temas||[]).join(' '),l.resumen].join(' '))}
+function libroHay(l){return norm([l.clave,l.apellido,l.autor,l.titulo,l.editorial,l.anio,(l.temas||[]).join(' '),l.categoria||'',l.resumen].join(' '))}
 function fichaHay(f){
   var l=libroById(f.libro);
   var ps=(f.usos||[]).map(function(u){var p=proyById(u.p);return p?p.nombre:''}).join(' ');
@@ -428,6 +430,14 @@ async function saveFile(filename,data){
     var dl=window.claude&&window.claude.use?await window.claude.use('downloads'):null;
     if(dl){await dl.save({filename:filename,data:data});toast('Archivo guardado');return}
   }catch(e){if(e&&e.code==='declined')return}
+  /* 1b) APK: guarda en Descargas/Hermes */
+  if(NAT){
+    try{
+      var b64=await new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(String(fr.result).split(',')[1])};fr.onerror=rej;fr.readAsDataURL(blob)});
+      var sv=await natCall('save',{name:filename,mime:blob.type,data:b64});
+      toast('Guardado en '+(sv&&sv.path||'Descargas')+': '+filename);return
+    }catch(e){toast('No se pudo guardar el archivo');return}
+  }
   /* 2) computadora: carpeta elegida una vez y recordada */
   if(window.showDirectoryPicker){
     try{
@@ -454,7 +464,7 @@ async function saveFile(filename,data){
 }
 
 /* ---------- navegación y estado de vista ---------- */
-var V={tab:'buscar',sub:null,q:'',scope:'todo',tipo:'',proj:'',limit:30,assign:null,libFilter:'',pf:'todas',pendingRestore:null,confirm:null};
+var V={tab:'buscar',sub:null,q:'',scope:'todo',tipo:'',proj:'',limit:30,assign:null,libFilter:'',catFilter:'',pf:'todas',pendingRestore:null,confirm:null};
 var raf=0;
 function scheduleRender(){if(raf)return;raf=requestAnimationFrame(function(){raf=0;update()})}
 function drawTabs(){
@@ -573,26 +583,31 @@ function updateBuscar(){
 }
 
 /* ---------- LIBROS ---------- */
+var CATS_BASE=['Teoría','Metodología','Historia','Literatura','Fuente primaria','Referencia'];
+function catsUsadas(){var m={};S.libros.forEach(function(l){var c=(l.categoria||'').trim();if(c)m[c]=(m[c]||0)+1});return m}
+function catsSugeridas(){var u=catsUsadas(),a=Object.keys(u);CATS_BASE.forEach(function(c){if(!a.some(function(x){return norm(x)===norm(c)}))a.push(c)});return a.sort(function(x,y){return norm(x).localeCompare(norm(y))})}
 function libroRow(l){
   var n=fichasDeLibro(l.id).length;
   var dc={'Leyendo':'leyendo','Leído':'leido','Por leer':'porleer','Consulta parcial':'parcial'}[l.estado]||'porleer';
   var rd=l.formato==='PDF'||l.formato==='Ebook'||HH.has(l.id)||(PF&&PF.id===l.id);
-  return '<div class="rowwrap"><button class="row" data-act="libro-edit" data-id="'+l.id+'"><div class="main"><div class="t">'+esc(l.titulo||'(sin título)')+'</div><div class="m">'+esc((l.autor||l.apellido||'')+(l.anio?' ('+l.anio+')':''))+'</div></div>'+
+  return '<div class="rowwrap"><button class="row" data-act="libro-edit" data-id="'+l.id+'"><div class="main"><div class="t">'+esc(l.titulo||'(sin título)')+'</div><div class="m">'+esc((l.autor||l.apellido||'')+(l.anio?' ('+l.anio+')':'')+(l.categoria?' · '+l.categoria:''))+'</div></div>'+
     '<div class="side"><div><span class="dot '+dc+'"></span>'+esc(l.estado||'Por leer')+'</div><div>'+pl(n,'ficha','fichas')+'</div></div></button>'+
     (rd?'<button class="rowopen" data-act="pdf-open" data-id="'+l.id+'" aria-label="Leer '+esc(l.titulo||'este libro')+'" title="Leer"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 5.5c3-1 6-1 10 1 4-2 7-2 10-1V19c-3-1-6-1-10 1-4-2-7-2-10-1z"/><path d="M12 6.5V20"/></svg></button>':'<span class="rowgap"></span>')+'</div>';
 }
 function mountLibros(){
   var counts={};ESTADOS_LECT.forEach(function(e){counts[e]=S.libros.filter(function(l){return l.estado===e}).length});
-  var list=S.libros.filter(function(l){return !V.libFilter||l.estado===V.libFilter}).sort(function(a,b){return norm(a.apellido).localeCompare(norm(b.apellido))||(a.anio||0)-(b.anio||0)});
+  var list=S.libros.filter(function(l){return (!V.libFilter||l.estado===V.libFilter)&&(!V.catFilter||(V.catFilter==='__sin__'?!l.categoria:l.categoria===V.catFilter))}).sort(function(a,b){return norm(a.apellido).localeCompare(norm(b.apellido))||(a.anio||0)-(b.anio||0)});
   var chips='<button class="chip'+(!V.libFilter?' on':'')+'" data-act="libfilter" data-v="">Todos ('+S.libros.length+')</button>'+
     ESTADOS_LECT.map(function(e){return '<button class="chip'+(V.libFilter===e?' on':'')+'" data-act="libfilter" data-v="'+e+'">'+e+' ('+counts[e]+')</button>'}).join('');
-  $('#main').innerHTML='<div class="top"><h1>Libros</h1><button class="btn primary" data-act="libro-new">Nuevo libro</button></div><div class="chips">'+chips+'</div>'+
+  var cu=catsUsadas(),ck=Object.keys(cu).sort(function(x,y){return norm(x).localeCompare(norm(y))}),sin=S.libros.filter(function(l){return !l.categoria}).length;
+  var cchips=ck.length?'<div class="chips"><span class="sub" style="align-self:center;margin:0 4px 0 0">Categoría</span><button class="chip'+(!V.catFilter?' on':'')+'" data-act="catfilter" data-v="">Todas</button>'+ck.map(function(c){return '<button class="chip'+(V.catFilter===c?' on':'')+'" data-act="catfilter" data-v="'+esc(c)+'">'+esc(c)+' ('+cu[c]+')</button>'}).join('')+(sin?'<button class="chip'+(V.catFilter==='__sin__'?' on':'')+'" data-act="catfilter" data-v="__sin__">Sin categoría ('+sin+')</button>':'')+'</div>':'';
+  $('#main').innerHTML='<div class="top"><h1>Libros</h1><button class="btn primary" data-act="libro-new">Nuevo libro</button></div><div class="chips">'+chips+'</div>'+cchips+
     (list.length?'<div class="rows">'+list.map(libroRow).join('')+'</div>':
-     '<div class="empty"><p class="lead">'+(S.libros.length?'No hay libros con ese estado.':'Aún no registras lecturas.')+'</p><p class="sub">Aquí queda el historial de todo lo que lees, sirva o no para un proyecto.</p>'+(S.libros.length?'':'<button class="btn primary" data-act="libro-new">Registrar el primer libro</button>')+'</div>');
+     '<div class="empty"><p class="lead">'+(S.libros.length?'No hay libros con ese filtro.':'Aún no registras lecturas.')+'</p><p class="sub">Aquí queda el historial de todo lo que lees, sirva o no para un proyecto.</p>'+(S.libros.length?'':'<button class="btn primary" data-act="libro-new">Registrar el primer libro</button>')+'</div>');
 }
 var EL=null;
 function openLibro(id){
-  var d=id?clone(libroById(id)):{id:uid(),clave:'',apellido:'',anio:'',autor:'',titulo:'',editorial:'',tipo:'Libro',formato:'Físico',estado:'Leyendo',inicio:today(),fin:'',valoracion:'',temas:[],resumen:'',creado:Date.now()};
+  var d=id?clone(libroById(id)):{id:uid(),clave:'',apellido:'',anio:'',autor:'',titulo:'',editorial:'',tipo:'Libro',formato:'Físico',estado:'Leyendo',categoria:'',inicio:today(),fin:'',valoracion:'',temas:[],resumen:'',creado:Date.now()};
   EL={d:d,isNew:!id,claveTouched:!!id};
   var opt=function(arr,v){return arr.map(function(x){return '<option'+(v===x?' selected':'')+'>'+x+'</option>'}).join('')};
   var nf=id?fichasDeLibro(id).length:0;
@@ -601,9 +616,11 @@ function openLibro(id){
    '<div class="two"><div><label class="f">Apellido(s) para citar</label><input id="l-apellido" value="'+esc(d.apellido)+'" placeholder="Pérez" autocomplete="off"></div><div><label class="f">Año</label><input id="l-anio" inputmode="numeric" value="'+esc(d.anio)+'" placeholder="2020"></div></div>'+
    '<label class="f">Autor(es) completo(s)</label><input id="l-autor" value="'+esc(d.autor)+'" placeholder="Pérez, J." autocomplete="off">'+
    '<label class="f">Editorial o revista</label><input id="l-editorial" value="'+esc(d.editorial)+'" autocomplete="off">'+
+   '<label class="f">Enlace (si es una página web)</label><input id="l-url" type="url" value="'+esc(d.url||'')+'" placeholder="https://" autocomplete="off">'+
    '<label class="f">Clave</label><input id="l-clave" value="'+esc(d.clave)+'" autocomplete="off">'+
    '<div class="two"><div><label class="f">Tipo de obra</label><select id="l-tipo">'+opt(TIPOS_OBRA,d.tipo)+'</select></div><div><label class="f">Formato</label><select id="l-formato">'+opt(FORMATOS,d.formato)+'</select></div></div>'+
    '<div class="two"><div><label class="f">Estado de lectura</label><select id="l-estado">'+opt(ESTADOS_LECT,d.estado)+'</select></div><div><label class="f">Valoración</label><select id="l-val"><option value="">Sin valorar</option>'+[1,2,3,4,5].map(function(n){return '<option value="'+n+'"'+(String(d.valoracion)===String(n)?' selected':'')+'>'+n+' de 5</option>'}).join('')+'</select></div></div>'+
+   '<label class="f">Categoría</label><input id="l-cat" list="l-cats" value="'+esc(d.categoria||'')+'" placeholder="Ej.: Teoría, Metodología, Historia" autocomplete="off"><datalist id="l-cats">'+catsSugeridas().map(function(c){return '<option value="'+esc(c)+'">'}).join('')+'</datalist><p class="sub" style="margin:4px 0 0">Agrupa tus libros por área o uso. Es independiente del estado de lectura. Escribe una nueva o elige una de la lista.</p>'+
    '<div class="two"><div><label class="f">Inicio</label><input type="date" id="l-inicio" value="'+esc(d.inicio)+'"></div><div><label class="f">Fin</label><input type="date" id="l-fin" value="'+esc(d.fin)+'"></div></div>'+
    '<label class="f">Temas (separa con coma)</label><input id="l-temas" value="'+esc((d.temas||[]).join(', '))+'" autocomplete="off">'+
    '<label class="f">Resumen: ¿qué aporta esta obra?</label><textarea id="l-resumen" rows="4">'+esc(d.resumen)+'</textarea>'+
@@ -612,8 +629,9 @@ function openLibro(id){
 }
 function saveLibro(){
   var d=EL.d,g=function(i){return $('#'+i).value.trim()};
-  d.titulo=g('l-titulo');d.apellido=g('l-apellido');d.anio=g('l-anio');d.autor=g('l-autor');d.editorial=g('l-editorial');
+  d.titulo=g('l-titulo');d.url=g('l-url');d.apellido=g('l-apellido');d.anio=g('l-anio');d.autor=g('l-autor');d.editorial=g('l-editorial');
   d.tipo=$('#l-tipo').value;d.formato=$('#l-formato').value;d.estado=$('#l-estado').value;d.valoracion=$('#l-val').value?Number($('#l-val').value):'';
+  var cv=($('#l-cat').value||'').replace(/\s+/g,' ').trim(),ex=Object.keys(catsUsadas()).concat(CATS_BASE).filter(function(x){return norm(x)===norm(cv)})[0];d.categoria=cv?(ex||cv):'';
   d.inicio=$('#l-inicio').value;d.fin=$('#l-fin').value;d.temas=parseTemas($('#l-temas').value);d.resumen=$('#l-resumen').value.trim();
   if(!d.titulo||!d.apellido){$('#l-err').textContent='Escribe al menos el título y el apellido del autor.';return}
   var c=g('l-clave');d.clave=c&&c!==d.clave&&!S.libros.some(function(l){return l.id!==d.id&&norm(l.clave)===norm(c)})?c:(c&&c===d.clave?c:genClave(d.apellido,d.anio,d.id));
@@ -749,7 +767,7 @@ function mountMas(){
     rest='<div class="box"><p style="margin:0 0 8px">El respaldo trae '+pl((r.libros||[]).length,'libro','libros')+', '+pl((r.fichas||[]).length,'ficha','fichas')+' y '+pl((r.proyectos||[]).length,'proyecto','proyectos')+'. Se añadirán a tu cuaderno y se actualizarán los que ya existan. No se borra nada.</p><div class="foot" style="margin-top:0"><button class="btn primary" data-act="restore-go">Restaurar ahora</button><button class="btn" data-act="restore-cancel">Cancelar</button></div></div>';
   }
   $('#main').innerHTML='<div class="top"><h1>Más</h1></div>'+
-   '<div class="box"><b>'+esc(Store.status)+' · v6</b><p class="sub" style="margin:6px 0 0">'+(Store.cloud?'Puedes abrir Hermes desde tu celular o tu computadora con la misma cuenta y verás lo mismo.':'Los datos se guardan solo en el navegador de este dispositivo. Haz respaldos con frecuencia.')+'</p></div>'+
+   '<div class="box"><b>'+esc(Store.status)+' · v10 · '+(NAT?'app':'web')+'</b><p class="sub" style="margin:6px 0 0">'+(Store.cloud?'Puedes abrir Hermes desde tu celular o tu computadora con la misma cuenta y verás lo mismo.':'Los datos se guardan solo en el navegador de este dispositivo. Haz respaldos con frecuencia.')+'</p></div>'+
    '<h3 style="margin-top:26px">Resumen</h3>'+
    st('Obras registradas',S.libros.length)+st('Por leer',cnt('Por leer'))+st('Leyendo',cnt('Leyendo'))+st('Leídas',cnt('Leído'))+st('Leídas este año',leidasAnio)+
    st('Fichas en total',S.fichas.length)+st('Fichas sin usar en ningún proyecto',sinUsar)+st('Fichas usadas en algún proyecto',usadas)+st('Proyectos',S.proyectos.length)+
@@ -773,9 +791,9 @@ function needXlsx(){if(!window.XLSX){toast('No se pudo cargar el exportador de E
 function exportAll(){
   if(!needXlsx())return;
   var wb=XLSX.utils.book_new();
-  var b=[['Clave','Apellido(s)','Año','Autor(es)','Título','Editorial / Revista','Tipo de obra','Formato','Estado de lectura','Inicio','Fin','Valoración','Temas','Resumen','Referencia','Nº de fichas']];
-  S.libros.slice().sort(function(a,c){return norm(a.apellido).localeCompare(norm(c.apellido))}).forEach(function(l){b.push([l.clave,l.apellido,l.anio,l.autor,l.titulo,l.editorial,l.tipo,l.formato,l.estado,l.inicio,l.fin,l.valoracion,(l.temas||[]).join('; '),l.resumen,referencia(l),fichasDeLibro(l.id).length])});
-  XLSX.utils.book_append_sheet(wb,sheetFrom(b,[14,14,7,22,38,22,11,9,15,11,11,10,24,40,55,9]),'Biblioteca');
+  var b=[['Clave','Apellido(s)','Año','Autor(es)','Título','Editorial / Revista','Tipo de obra','Formato','Estado de lectura','Categoría','Inicio','Fin','Valoración','Temas','Resumen','Referencia','Nº de fichas']];
+  S.libros.slice().sort(function(a,c){return norm(a.apellido).localeCompare(norm(c.apellido))}).forEach(function(l){b.push([l.clave,l.apellido,l.anio,l.autor,l.titulo,l.editorial,l.tipo,l.formato,l.estado,l.categoria||'',l.inicio,l.fin,l.valoracion,(l.temas||[]).join('; '),l.resumen,referencia(l),fichasDeLibro(l.id).length])});
+  XLSX.utils.book_append_sheet(wb,sheetFrom(b,[14,14,7,22,38,22,11,9,15,16,11,11,10,24,40,55,9]),'Biblioteca');
   var fh=[['Clave','Página','Tipo','Nota','Comentario','Temas','Cita lista','Proyectos donde se usó']];
   S.fichas.slice().sort(function(a,c){return (c.creado||0)-(a.creado||0)}).forEach(function(f){var l=libroById(f.libro);fh.push([l?l.clave:'',f.pagina,f.tipo,f.nota,f.comentario||'',(f.temas||[]).join('; '),citaLista(f),usosTexto(f)])});
   XLSX.utils.book_append_sheet(wb,sheetFrom(fh,[14,10,12,60,40,22,60,45]),'Fichas');
@@ -852,6 +870,7 @@ var ACT={
   'uso-estado':function(el){readFichaForm();var u=ED.d.usos[Number(el.dataset.i)];u.e=u.e==='Usada'?'Pendiente':'Usada';drawUsos()},
   /* libros */
   libfilter:function(el){V.libFilter=el.dataset.v;mountLibros()},
+  catfilter:function(el){V.catFilter=el.dataset.v;mountLibros()},
   'libro-new':function(){openLibro(null)},
   'libro-edit':function(el){openLibro(el.dataset.id)},
   'libro-save':function(){saveLibro()},
@@ -930,6 +949,16 @@ var PAGRE=/^\s*(?:pp?\.?\s*)?(\d+)\b/i;
 var VW=null;
 
 /* el PDF no se copia ni se guarda: se abre desde el dispositivo y solo se recuerda en memoria durante la sesión */
+/* APK (Capacitor): el plugin nativo guarda el permiso del archivo elegido, sin copiarlo */
+var NAT=!!(window.Capacitor&&(window.Capacitor.isNativePlatform?window.Capacitor.isNativePlatform():(window.Capacitor.getPlatform&&window.Capacitor.getPlatform()!=='web')));
+function natCall(m,o){var C=window.Capacitor;if(C&&C.Plugins&&C.Plugins.HermesFile&&C.Plugins.HermesFile[m])return C.Plugins.HermesFile[m](o||{});return C.nativePromise('HermesFile',m,o||{})}
+async function natRead(uri,name){
+  var r=await natCall('read',{uri:uri});
+  var bin=atob(r.data),n=bin.length,u=new Uint8Array(n);
+  for(var i=0;i<n;i++)u[i]=bin.charCodeAt(i);
+  var nm=name||r.name||'libro';
+  return new File([u],nm,{type:/\.epub$/i.test(nm)?'application/epub+zip':'application/pdf'});
+}
 var PF=null,PEND=null;
 try{indexedDB.deleteDatabase('cuaderno-pdf')}catch(e){}
 /* archivos: referencia (si el navegador la permite) o copia opcional por libro */
@@ -954,7 +983,7 @@ hdo('readonly',function(s){return s.getAll()}).then(function(a){(a||[]).forEach(
 async function hMeta(id,patch){
   var old=null;try{old=await hdo('readonly',function(s){return s.get(id)})}catch(e){}
   var rec=Object.assign({id:id},old||{},patch);
-  if(!rec.handle&&!rec.copy){await hdo('readwrite',function(s){return s.delete(id)});HH.delete(id);HC.delete(id);return}
+  if(!rec.handle&&!rec.copy&&!rec.uri){await hdo('readwrite',function(s){return s.delete(id)});HH.delete(id);HC.delete(id);return}
   await hdo('readwrite',function(s){return s.put(rec)});
   HH.set(id,rec.kind);if(rec.copy)HC.set(id,rec.size||0);else HC.delete(id);
 }
@@ -971,6 +1000,27 @@ async function saveCopy(id,file){
 }
 async function askPdf(id,target,change){
   if(!change&&PF&&PF.id===id){openFile(id,target,PF.file);return}
+  if(NAT){
+    if(!change){
+      try{
+        var rr=await hdo('readonly',function(st){return st.get(id)});
+        if(rr&&rr.uri){
+          try{var f0=await natRead(rr.uri,rr.name);openFile(id,target,f0);return}
+          catch(e){toast('No se pudo abrir el archivo guardado. Elígelo de nuevo.')}
+        }
+      }catch(e){}
+    }
+    try{
+      var pk=await natCall('pick',{});
+      var f1=await natRead(pk.uri,pk.name),k1=kindOfFile(f1);
+      if(!k1){toast('Elige un archivo PDF o EPUB');return}
+      await hMeta(id,{uri:pk.uri,name:pk.name,kind:k1,copy:false,handle:null});
+      redrawPdfBlock(id);openFile(id,target,f1);
+    }catch(e){
+      if(!/cancel/i.test(String((e&&e.message)||e)))toast('No se pudo abrir el archivo');
+    }
+    return;
+  }
   if(!change&&HC.has(id)){
     try{
       var c=await hdo('readonly',function(s){return s.get(id)},'c');
@@ -1107,7 +1157,7 @@ async function vRender(n){
     var tc=await page.getTextContent();
     if(VW!==me||key!==vKey()||!me.vis.has(n)){pg.busy=false;if(VW===me&&me.vis.has(n))vRender(n);return}
     pg.w=v1.width;pg.h=v1.height;
-    var tl=document.createElement('div');tl.className='textLayer';
+    var tl=document.createElement('div');tl.className='textLayer';tl.style.setProperty('--scale-factor',vp.scale);
     pg.el.innerHTML='';pg.el.style.width=key+'px';pg.el.style.height=vp.height+'px';
     pg.el.appendChild(cv);pg.el.appendChild(tl);
     await pdfjsLib.renderTextLayer({textContentSource:tc,container:tl,viewport:vp,textDivs:[]}).promise;
@@ -1643,7 +1693,7 @@ initCloud();
 })();
 </script>
 <script>
-if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})})}
+if('serviceWorker' in navigator&&!window.Capacitor){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})})}
 </script>
 </body>
 </html>
