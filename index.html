@@ -162,7 +162,30 @@ label.f{display:block;font-size:14px;color:var(--muted);margin:16px 0 6px}
 .textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;text-align:initial;font-size-adjust:none}
 .textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
 .textLayer ::selection{background:rgba(47,75,198,.35)}
-.vmsg{padding:24px;text-align:center}
+.vscroll{touch-action:pan-x pan-y}
+.vtoggle{display:flex;gap:6px;align-items:center}
+.vtoggle .btn.on{background:var(--ink);color:var(--bg)}
+.libgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:16px 12px;margin-top:12px}
+.tile{position:relative;min-width:0}
+.tcv{display:block;width:100%;text-align:left;background:transparent;border:0;padding:0;color:inherit}
+.cover{position:relative;aspect-ratio:2/3;border-radius:6px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.3);background:#44506a}
+.cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.cover .ct{position:absolute;inset:0;display:flex;align-items:flex-end;padding:8px;font-family:var(--serif);font-size:13px;line-height:1.2;color:#fff;font-weight:600;overflow:hidden;overflow-wrap:anywhere}
+.tile .tt{font-size:13px;font-weight:600;margin-top:7px;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.tile .ta{font-size:12px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .bd{position:absolute;left:6px;top:6px;font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(0,0,0,.68);color:#fff}
+.tile .nf{position:absolute;right:6px;top:6px;font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.92);color:#17233B}
+.cvw{position:relative}
+.tile .rd{position:absolute;right:6px;bottom:6px;width:36px;height:36px;border-radius:50%;background:rgba(23,35,59,.92);color:#fff;border:0;display:flex;align-items:center;justify-content:center}
+.thumbc{width:42px;flex:none;border-radius:4px}
+.thumbc .ct{font-size:16px;padding:4px;align-items:center;justify-content:center}
+.bres{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);align-items:flex-start}
+.bres>img,.bres .nophoto{width:48px;height:72px;object-fit:cover;border-radius:4px;background:#d9deea;flex:none}
+.bres .bt{font-weight:600;font-size:14px}
+.bres .bm{font-size:12px;color:var(--muted)}
+.bres .acts{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap}
+.covrow{display:flex;gap:14px;align-items:flex-start;margin:4px 0 8px}
+
 .vbar{background:var(--surface);border-top:1px solid var(--line);padding:8px 12px calc(8px + env(safe-area-inset-bottom,0px))}
 .vsel{font-size:13px;min-height:36px;margin-bottom:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .vrow{display:flex;align-items:center;gap:8px}
@@ -464,7 +487,7 @@ async function saveFile(filename,data){
 }
 
 /* ---------- navegación y estado de vista ---------- */
-var V={tab:'buscar',sub:null,q:'',scope:'todo',tipo:'',proj:'',limit:30,assign:null,libFilter:'',catFilter:'',pf:'todas',pendingRestore:null,confirm:null};
+var V={tab:'buscar',sub:null,q:'',scope:'todo',tipo:'',proj:'',limit:30,assign:null,libFilter:'',catFilter:'',libVista:(function(){try{return localStorage.getItem('hermes-vista-lib')||'grid'}catch(e){return 'grid'}})(),pf:'todas',pendingRestore:null,confirm:null};
 var raf=0;
 function scheduleRender(){if(raf)return;raf=requestAnimationFrame(function(){raf=0;update()})}
 function drawTabs(){
@@ -582,15 +605,103 @@ function updateBuscar(){
   R.innerHTML=h2;
 }
 
+/* ---------- PORTADAS Y BÚSQUEDA DE LIBROS EN LA WEB ---------- */
+var COV=new Map();
+function coverSrc(l){return (l&&l.portada)||(l&&COV.get(l.id))||''}
+async function covSet(id,url){COV.set(id,url);try{await hdo('readwrite',function(st){return st.put({id:id,url:url})},'p')}catch(e){}}
+function phColor(t){var h=0,x=String(t||'?');for(var i=0;i<x.length;i++)h=(h*31+x.charCodeAt(i))>>>0;return 'hsl('+(h%360)+',32%,34%)'}
+function coverHtml(l,cls,style){
+  var src=coverSrc(l),t=l.titulo||'';
+  return '<div class="cover'+(cls?' '+cls:'')+'" style="background:'+phColor(t+(l.apellido||''))+';'+(style||'')+'"><span class="ct">'+esc(cls==='thumbc'?(t.charAt(0)||'?'):t)+'</span>'+
+    (src?'<img src="'+esc(src)+'" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">':'')+'</div>';
+}
+async function covFromPdfPage(page,id){
+  try{
+    var v1=page.getViewport({scale:1}),vp=page.getViewport({scale:260/v1.width});
+    var cv=document.createElement('canvas');cv.width=Math.max(1,Math.floor(vp.width));cv.height=Math.max(1,Math.floor(vp.height));
+    var cx=cv.getContext('2d');cx.fillStyle='#fff';cx.fillRect(0,0,cv.width,cv.height);
+    await page.render({canvasContext:cx,viewport:vp}).promise;
+    await covSet(id,cv.toDataURL('image/jpeg',.72));scheduleRender();
+  }catch(e){}
+}
+async function covFromEpub(zip,man,od,id){
+  try{
+    var ids=Object.keys(man),it=null;
+    ids.forEach(function(k){if(!it&&/cover-image/.test(man[k].prop))it=man[k]});
+    if(!it){var mt=Array.prototype.slice.call(od.getElementsByTagName('meta')).filter(function(m){return m.getAttribute('name')==='cover'})[0];if(mt&&man[mt.getAttribute('content')])it=man[mt.getAttribute('content')]}
+    if(!it)ids.forEach(function(k){if(!it&&/image/.test(man[k].type)&&/cover/i.test(k+man[k].path))it=man[k]});
+    if(!it)return;
+    var f=zf(zip,it.path);if(!f)return;
+    var u=URL.createObjectURL(new Blob([await f.async('uint8array')],{type:it.type||'image/jpeg'})),img=new Image();
+    await new Promise(function(res,rej){img.onload=res;img.onerror=rej;img.src=u});
+    var w=260,h=Math.round(img.naturalHeight*w/img.naturalWidth),cv=document.createElement('canvas');cv.width=w;cv.height=h;
+    cv.getContext('2d').drawImage(img,0,0,w,h);URL.revokeObjectURL(u);
+    await covSet(id,cv.toDataURL('image/jpeg',.78));scheduleRender();
+  }catch(e){}
+}
+var PART_AP=['de','del','la','las','los','van','von','da','di','y'];
+function autorPartes(n){
+  n=String(n||'').replace(/\s+/g,' ').trim();if(!n)return null;
+  var ini=function(x){return x.split(/[\s-]+/).filter(function(w){return w&&PART_AP.indexOf(w.toLowerCase())<0}).map(function(w){return w.charAt(0).toUpperCase()+'.'}).join(' ')};
+  if(n.indexOf(',')>0){var p=n.split(',');return{ap:p[0].trim(),ini:ini(p.slice(1).join(' ').trim())}}
+  var w=n.split(' ');if(w.length===1)return{ap:w[0],ini:''};
+  var k=w.length-1;while(k>1&&PART_AP.indexOf(w[k-1].toLowerCase())>=0)k--;
+  return{ap:w.slice(k).join(' '),ini:ini(w.slice(0,k).join(' '))};
+}
+function normLibroWeb(titulo,autores,fecha,editorial,portada){
+  var ps=(autores||[]).map(autorPartes).filter(Boolean).slice(0,4),m=String(fecha||'').match(/(1[5-9]\d\d|20\d\d)/);
+  return{titulo:String(titulo||'').trim(),autor:ps.map(function(a){return a.ini?a.ap+', '+a.ini:a.ap}).join('; '),apellido:ps.length?ps[0].ap:'',anio:m?m[1]:'',editorial:String(editorial||'').trim(),portada:portada||''};
+}
+async function buscarLibros(q){
+  var out=[];
+  try{
+    var r=await fetch('https://www.googleapis.com/books/v1/volumes?maxResults=8&printType=books&q='+encodeURIComponent(q));
+    var j=await r.json();
+    (j.items||[]).forEach(function(it){
+      var v=it.volumeInfo||{},im=v.imageLinks||{};
+      var cov=String(im.thumbnail||im.smallThumbnail||'').replace(/^http:/,'https:').replace('&edge=curl','');
+      out.push(normLibroWeb(v.title+(v.subtitle?': '+v.subtitle:''),v.authors,v.publishedDate,v.publisher,cov));
+    });
+  }catch(e){}
+  if(out.length<3){
+    try{
+      var r2=await fetch('https://openlibrary.org/search.json?limit=8&fields=title,subtitle,author_name,first_publish_year,publisher,cover_i&q='+encodeURIComponent(q));
+      var j2=await r2.json();
+      (j2.docs||[]).forEach(function(d){
+        out.push(normLibroWeb(d.title+(d.subtitle?': '+d.subtitle:''),d.author_name,d.first_publish_year,(d.publisher||[])[0],d.cover_i?'https://covers.openlibrary.org/b/id/'+d.cover_i+'-M.jpg':''));
+      });
+    }catch(e){}
+  }
+  return out.filter(function(x){return x.titulo});
+}
+function bresHtml(r){
+  if(!r.length)return '<p class="sub">No encontré resultados. Prueba con menos palabras, por ejemplo solo el título.</p>';
+  return r.map(function(it,i){
+    return '<div class="bres">'+(it.portada?'<img src="'+esc(it.portada)+'" alt="" referrerpolicy="no-referrer">':'<div class="nophoto"></div>')+
+      '<div style="min-width:0;flex:1"><div class="bt">'+esc(it.titulo)+'</div><div class="bm">'+esc([it.autor,it.anio,it.editorial].filter(Boolean).join(' · '))+'</div>'+
+      '<div class="acts"><button class="btn small primary" data-act="bres-todo" data-i="'+i+'">Usar datos y portada</button>'+(it.portada?'<button class="btn small" data-act="bres-portada" data-i="'+i+'">Solo portada</button>':'')+'</div></div></div>';
+  }).join('');
+}
+function textoExterno(t){
+  t=String(t||'').replace(/\s+/g,' ').trim().slice(0,200);if(!t)return;
+  try{closeViewer()}catch(e){}
+  openLibro(null,{titulo:t,buscar:true});
+}
 /* ---------- LIBROS ---------- */
 var CATS_BASE=['Teoría','Metodología','Historia','Literatura','Fuente primaria','Referencia'];
 function catsUsadas(){var m={};S.libros.forEach(function(l){var c=(l.categoria||'').trim();if(c)m[c]=(m[c]||0)+1});return m}
 function catsSugeridas(){var u=catsUsadas(),a=Object.keys(u);CATS_BASE.forEach(function(c){if(!a.some(function(x){return norm(x)===norm(c)}))a.push(c)});return a.sort(function(x,y){return norm(x).localeCompare(norm(y))})}
+function libroTile(l){
+  var n=fichasDeLibro(l.id).length,rd=l.formato==='PDF'||l.formato==='Ebook'||HH.has(l.id)||(PF&&PF.id===l.id);
+  return '<div class="tile"><div class="cvw"><button class="tcv" data-act="libro-edit" data-id="'+l.id+'" aria-label="Editar '+esc(l.titulo||'libro')+'">'+coverHtml(l)+'<span class="bd">'+esc(l.estado||'Por leer')+'</span>'+(n?'<span class="nf">'+n+'</span>':'')+'</button>'+
+    (rd?'<button class="rd" data-act="pdf-open" data-id="'+l.id+'" aria-label="Leer" title="Leer"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 5.5c3-1 6-1 10 1 4-2 7-2 10-1V19c-3-1-6-1-10 1-4-2-7-2-10-1z"/><path d="M12 6.5V20"/></svg></button>':'')+'</div>'+
+    '<button class="tcv" data-act="libro-edit" data-id="'+l.id+'"><div class="tt">'+esc(l.titulo||'(sin título)')+'</div><div class="ta">'+esc((l.autor||l.apellido||'')+(l.anio?' ('+l.anio+')':''))+'</div></button></div>';
+}
 function libroRow(l){
   var n=fichasDeLibro(l.id).length;
   var dc={'Leyendo':'leyendo','Leído':'leido','Por leer':'porleer','Consulta parcial':'parcial'}[l.estado]||'porleer';
   var rd=l.formato==='PDF'||l.formato==='Ebook'||HH.has(l.id)||(PF&&PF.id===l.id);
-  return '<div class="rowwrap"><button class="row" data-act="libro-edit" data-id="'+l.id+'"><div class="main"><div class="t">'+esc(l.titulo||'(sin título)')+'</div><div class="m">'+esc((l.autor||l.apellido||'')+(l.anio?' ('+l.anio+')':'')+(l.categoria?' · '+l.categoria:''))+'</div></div>'+
+  return '<div class="rowwrap"><button class="row" data-act="libro-edit" data-id="'+l.id+'">'+coverHtml(l,'thumbc')+'<div class="main"><div class="t">'+esc(l.titulo||'(sin título)')+'</div><div class="m">'+esc((l.autor||l.apellido||'')+(l.anio?' ('+l.anio+')':'')+(l.categoria?' · '+l.categoria:''))+'</div></div>'+
     '<div class="side"><div><span class="dot '+dc+'"></span>'+esc(l.estado||'Por leer')+'</div><div>'+pl(n,'ficha','fichas')+'</div></div></button>'+
     (rd?'<button class="rowopen" data-act="pdf-open" data-id="'+l.id+'" aria-label="Leer '+esc(l.titulo||'este libro')+'" title="Leer"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 5.5c3-1 6-1 10 1 4-2 7-2 10-1V19c-3-1-6-1-10 1-4-2-7-2-10-1z"/><path d="M12 6.5V20"/></svg></button>':'<span class="rowgap"></span>')+'</div>';
 }
@@ -601,13 +712,14 @@ function mountLibros(){
     ESTADOS_LECT.map(function(e){return '<button class="chip'+(V.libFilter===e?' on':'')+'" data-act="libfilter" data-v="'+e+'">'+e+' ('+counts[e]+')</button>'}).join('');
   var cu=catsUsadas(),ck=Object.keys(cu).sort(function(x,y){return norm(x).localeCompare(norm(y))}),sin=S.libros.filter(function(l){return !l.categoria}).length;
   var cchips=ck.length?'<div class="chips"><span class="sub" style="align-self:center;margin:0 4px 0 0">Categoría</span><button class="chip'+(!V.catFilter?' on':'')+'" data-act="catfilter" data-v="">Todas</button>'+ck.map(function(c){return '<button class="chip'+(V.catFilter===c?' on':'')+'" data-act="catfilter" data-v="'+esc(c)+'">'+esc(c)+' ('+cu[c]+')</button>'}).join('')+(sin?'<button class="chip'+(V.catFilter==='__sin__'?' on':'')+'" data-act="catfilter" data-v="__sin__">Sin categoría ('+sin+')</button>':'')+'</div>':'';
-  $('#main').innerHTML='<div class="top"><h1>Libros</h1><button class="btn primary" data-act="libro-new">Nuevo libro</button></div><div class="chips">'+chips+'</div>'+cchips+
-    (list.length?'<div class="rows">'+list.map(libroRow).join('')+'</div>':
+  var vt='<div class="vtoggle"><button class="btn small'+(V.libVista==='grid'?' on':'')+'" data-act="libvista" data-v="grid" aria-label="Ver portadas" title="Portadas">▦</button><button class="btn small'+(V.libVista==='list'?' on':'')+'" data-act="libvista" data-v="list" aria-label="Ver lista" title="Lista">☰</button></div>';
+  $('#main').innerHTML='<div class="top"><h1>Libros</h1><div class="vtoggle">'+vt+'<button class="btn primary" data-act="libro-new">Nuevo libro</button></div></div><div class="chips">'+chips+'</div>'+cchips+
+    (list.length?(V.libVista==='grid'?'<div class="libgrid">'+list.map(libroTile).join('')+'</div>':'<div class="rows">'+list.map(libroRow).join('')+'</div>'):
      '<div class="empty"><p class="lead">'+(S.libros.length?'No hay libros con ese filtro.':'Aún no registras lecturas.')+'</p><p class="sub">Aquí queda el historial de todo lo que lees, sirva o no para un proyecto.</p>'+(S.libros.length?'':'<button class="btn primary" data-act="libro-new">Registrar el primer libro</button>')+'</div>');
 }
 var EL=null;
-function openLibro(id){
-  var d=id?clone(libroById(id)):{id:uid(),clave:'',apellido:'',anio:'',autor:'',titulo:'',editorial:'',tipo:'Libro',formato:'Físico',estado:'Leyendo',categoria:'',inicio:today(),fin:'',valoracion:'',temas:[],resumen:'',creado:Date.now()};
+function openLibro(id,pre){
+  var d=id?clone(libroById(id)):{id:uid(),clave:'',apellido:'',anio:'',autor:'',titulo:(pre&&pre.titulo)||'',editorial:'',tipo:'Libro',formato:'Físico',estado:'Leyendo',categoria:'',inicio:today(),fin:'',valoracion:'',temas:[],resumen:'',creado:Date.now()};
   EL={d:d,isNew:!id,claveTouched:!!id};
   var opt=function(arr,v){return arr.map(function(x){return '<option'+(v===x?' selected':'')+'>'+x+'</option>'}).join('')};
   var nf=id?fichasDeLibro(id).length:0;
@@ -615,6 +727,7 @@ function openLibro(id){
    '<label class="f">Título</label><input id="l-titulo" value="'+esc(d.titulo)+'" autocomplete="off">'+
    '<div class="two"><div><label class="f">Apellido(s) para citar</label><input id="l-apellido" value="'+esc(d.apellido)+'" placeholder="Pérez" autocomplete="off"></div><div><label class="f">Año</label><input id="l-anio" inputmode="numeric" value="'+esc(d.anio)+'" placeholder="2020"></div></div>'+
    '<label class="f">Autor(es) completo(s)</label><input id="l-autor" value="'+esc(d.autor)+'" placeholder="Pérez, J." autocomplete="off">'+
+   '<label class="f">Portada y datos de la web</label><div class="covrow"><div id="l-cov">'+coverHtml(d,'','width:76px')+'</div><div><button class="btn small" data-act="buscar-libro">Buscar en la web</button><p class="sub" style="margin:6px 0 0;max-width:230px">Completa autor, año, editorial y portada a partir del título. Si hay un archivo del libro, se usa su primera hoja.</p>'+(d.portada?'<button class="link" data-act="portada-quitar">Quitar portada de la web</button>':'')+'</div></div><div id="l-res"></div>'+
    '<label class="f">Editorial o revista</label><input id="l-editorial" value="'+esc(d.editorial)+'" autocomplete="off">'+
    '<label class="f">Enlace (si es una página web)</label><input id="l-url" type="url" value="'+esc(d.url||'')+'" placeholder="https://" autocomplete="off">'+
    '<label class="f">Clave</label><input id="l-clave" value="'+esc(d.clave)+'" autocomplete="off">'+
@@ -626,6 +739,7 @@ function openLibro(id){
    '<label class="f">Resumen: ¿qué aporta esta obra?</label><textarea id="l-resumen" rows="4">'+esc(d.resumen)+'</textarea>'+
    '<div class="err" id="l-err"></div>'+
    (id?pdfBlock(id):'')+'<div class="foot">'+(id?'<button class="btn" data-act="libro-fichas" data-id="'+id+'">Ver sus '+pl(nf,'ficha','fichas')+'</button><button class="btn danger" data-act="libro-del" data-id="'+id+'">Eliminar libro</button>':'')+'</div></div>');
+  if(pre&&pre.buscar)setTimeout(function(){if(ACT['buscar-libro'])ACT['buscar-libro']()},80);
 }
 function saveLibro(){
   var d=EL.d,g=function(i){return $('#'+i).value.trim()};
@@ -767,7 +881,7 @@ function mountMas(){
     rest='<div class="box"><p style="margin:0 0 8px">El respaldo trae '+pl((r.libros||[]).length,'libro','libros')+', '+pl((r.fichas||[]).length,'ficha','fichas')+' y '+pl((r.proyectos||[]).length,'proyecto','proyectos')+'. Se añadirán a tu cuaderno y se actualizarán los que ya existan. No se borra nada.</p><div class="foot" style="margin-top:0"><button class="btn primary" data-act="restore-go">Restaurar ahora</button><button class="btn" data-act="restore-cancel">Cancelar</button></div></div>';
   }
   $('#main').innerHTML='<div class="top"><h1>Más</h1></div>'+
-   '<div class="box"><b>'+esc(Store.status)+' · v10 · '+(NAT?'app':'web')+'</b><p class="sub" style="margin:6px 0 0">'+(Store.cloud?'Puedes abrir Hermes desde tu celular o tu computadora con la misma cuenta y verás lo mismo.':'Los datos se guardan solo en el navegador de este dispositivo. Haz respaldos con frecuencia.')+'</p></div>'+
+   '<div class="box"><b>'+esc(Store.status)+' · v11 · '+(NAT?'app':'web')+'</b><p class="sub" style="margin:6px 0 0">'+(Store.cloud?'Puedes abrir Hermes desde tu celular o tu computadora con la misma cuenta y verás lo mismo.':'Los datos se guardan solo en el navegador de este dispositivo. Haz respaldos con frecuencia.')+'</p></div>'+
    '<h3 style="margin-top:26px">Resumen</h3>'+
    st('Obras registradas',S.libros.length)+st('Por leer',cnt('Por leer'))+st('Leyendo',cnt('Leyendo'))+st('Leídas',cnt('Leído'))+st('Leídas este año',leidasAnio)+
    st('Fichas en total',S.fichas.length)+st('Fichas sin usar en ningún proyecto',sinUsar)+st('Fichas usadas en algún proyecto',usadas)+st('Proyectos',S.proyectos.length)+
@@ -966,8 +1080,8 @@ var HH=new Map(),HC=new Map();
 function hdb(){
   return hdb.p||(hdb.p=new Promise(function(res,rej){
     try{
-      var r=indexedDB.open('cuaderno-archivos',2);
-      r.onupgradeneeded=function(){var d=r.result;if(!d.objectStoreNames.contains('h'))d.createObjectStore('h',{keyPath:'id'});if(!d.objectStoreNames.contains('c'))d.createObjectStore('c',{keyPath:'id'})};
+      var r=indexedDB.open('cuaderno-archivos',3);
+      r.onupgradeneeded=function(){var d=r.result;if(!d.objectStoreNames.contains('h'))d.createObjectStore('h',{keyPath:'id'});if(!d.objectStoreNames.contains('c'))d.createObjectStore('c',{keyPath:'id'});if(!d.objectStoreNames.contains('p'))d.createObjectStore('p',{keyPath:'id'})};
       r.onsuccess=function(){res(r.result)};r.onerror=function(){rej(r.error)};
     }catch(e){rej(e)}
   }));
@@ -979,6 +1093,7 @@ function hdo(mode,fn,st){
     tx.oncomplete=function(){res(rq?rq.result:undefined)};tx.onerror=tx.onabort=function(){rej(tx.error)};
   })});
 }
+hdo('readonly',function(s){return s.getAll()},'p').then(function(a){(a||[]).forEach(function(r){COV.set(r.id,r.url)});scheduleRender()}).catch(function(){});
 hdo('readonly',function(s){return s.getAll()}).then(function(a){(a||[]).forEach(function(r){HH.set(r.id,r.kind);if(r.copy)HC.set(r.id,r.size||0)});scheduleRender()}).catch(function(){});
 async function hMeta(id,patch){
   var old=null;try{old=await hdo('readonly',function(s){return s.get(id)})}catch(e){}
@@ -1117,6 +1232,7 @@ function goPage(n){
 async function vLayout(me){
   var sc=$('#vscroll');
   var p1=await me.doc.getPage(1);if(VW!==me)return;
+  if(!coverSrc(libroById(me.id)))covFromPdfPage(p1,me.id);
   var v1=p1.getViewport({scale:1});
   me.cw=sc.clientWidth;me.tw=Math.min(sc.clientWidth-16,900);
   var box=$('#vpages');box.innerHTML='';
@@ -1211,7 +1327,7 @@ async function openViewer(id,page,file){
   el.classList.add('open');document.documentElement.style.overflow='hidden';
   var me=VW={kind:'pdf',read:readPref(),id:id,zoom:1,pages:[],cur:1,sel:null,n:0,vis:new Set(),text:false,empty:0,scanned:false,target:0};
   vSelUI();vInfo();vReadUI();
-  $('#vscroll').addEventListener('scroll',vOnScroll,{passive:true});
+  $('#vscroll').addEventListener('scroll',vOnScroll,{passive:true});attachPinch($('#vscroll'));
   try{
     pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS+'pdf.worker.min.js';
     var buf=await file.arrayBuffer();
@@ -1303,6 +1419,43 @@ window.addEventListener('resize',function(){
   },250);
 });
 
+/* zoom con dos dedos (PDF: acerca la página; EPUB: cambia el tamaño de letra) y Ctrl + rueda en computadora */
+function efsGet(){var n=18;try{n=Number(localStorage.getItem(EFS))||18}catch(e){}return n}
+function efsSet(z){z=Math.max(12,Math.min(40,Math.round(z)));var v=$('#viewer');if(v)v.style.setProperty('--efs',z+'px');try{localStorage.setItem(EFS,String(z))}catch(e){}return z}
+function pdfZoomTo(z,fx,fy){
+  var sc=$('#vscroll');if(!VW||VW.kind!=='pdf'||!sc)return;
+  z=Math.max(.5,Math.min(4,Math.round(z*100)/100));if(Math.abs(z-VW.zoom)<.02)return;
+  var ratio=z/VW.zoom,cx=sc.scrollLeft+fx,cy=sc.scrollTop+fy;
+  VW.zoom=z;vSize();sc.scrollLeft=cx*ratio-fx;sc.scrollTop=cy*ratio-fy;
+  VW.vis.forEach(function(k){vRender(k)});toast(Math.round(z*100)+' %');
+}
+function attachPinch(sc){
+  var st=null,dist=function(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY)};
+  sc.addEventListener('touchstart',function(e){
+    if(e.touches.length!==2||!VW)return;
+    var r=sc.getBoundingClientRect();
+    st={d0:dist(e.touches)||1,fx:(e.touches[0].clientX+e.touches[1].clientX)/2-r.left,fy:(e.touches[0].clientY+e.touches[1].clientY)/2-r.top,s:1,z0:VW.kind==='pdf'?VW.zoom:efsGet(),box:$('#vpages')};
+    if(VW.kind==='pdf'&&st.box)st.box.style.transformOrigin=(sc.scrollLeft+st.fx)+'px '+(sc.scrollTop+st.fy)+'px';
+  },{passive:true});
+  sc.addEventListener('touchmove',function(e){
+    if(!st||e.touches.length!==2)return;
+    if(e.cancelable)e.preventDefault();
+    var s=dist(e.touches)/st.d0;
+    if(VW.kind==='pdf'){st.s=Math.max(.5/st.z0,Math.min(4/st.z0,s));if(st.box)st.box.style.transform='scale('+st.s+')'}
+    else{st.s=s;efsSet(st.z0*s)}
+  },{passive:false});
+  function fin(e){
+    if(!st||(e.touches&&e.touches.length>=2))return;
+    var s=st;st=null;
+    if(VW&&VW.kind==='pdf'){if(s.box){s.box.style.transform='';s.box.style.transformOrigin=''}pdfZoomTo(s.z0*s.s,s.fx,s.fy)}
+  }
+  sc.addEventListener('touchend',fin);sc.addEventListener('touchcancel',fin);
+  sc.addEventListener('wheel',function(e){
+    if(!e.ctrlKey||!VW)return;e.preventDefault();
+    var r=sc.getBoundingClientRect(),k=e.deltaY<0?1:-1;
+    if(VW.kind==='pdf')pdfZoomTo(VW.zoom*(k>0?1.12:1/1.12),e.clientX-r.left,e.clientY-r.top);else efsSet(efsGet()+k*2);
+  },{passive:false});
+}
 /* ---------- LECTOR DE EPUB ---------- */
 var EPOS='cuaderno-epub-pos',EFS='cuaderno-epub-fs';
 var EMIME={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',svg:'image/svg+xml',webp:'image/webp'};
@@ -1463,7 +1616,7 @@ async function openEpub(id,target,file){
   try{var fs=Number(localStorage.getItem(EFS));if(fs)el.style.setProperty('--efs',fs+'px')}catch(e){}
   var me=VW={kind:'epub',read:readPref(),id:id,sel:null,ci:-1,spine:[],toc:[],hist:[],n:0,pb:false};
   vSelUI();vReadUI();
-  $('#vscroll').addEventListener('scroll',function(){if(!VW)return;clearTimeout(VW.pT);VW.pT=setTimeout(eSavePos,700)},{passive:true});
+  $('#vscroll').addEventListener('scroll',function(){if(!VW)return;clearTimeout(VW.pT);VW.pT=setTimeout(eSavePos,700)},{passive:true});attachPinch($('#vscroll'));
   try{
     var zip=await JSZip.loadAsync(file);if(VW!==me)return;
     var cd=new DOMParser().parseFromString(await zf(zip,'META-INF/container.xml').async('string'),'application/xml');
@@ -1474,6 +1627,7 @@ async function openEpub(id,target,file){
     Array.prototype.forEach.call(od.getElementsByTagName('itemref'),function(r){var m=man[r.getAttribute('idref')];if(m&&/html/.test(m.type))me.spine.push(m)});
     if(!me.spine.length)throw 0;
     me.zip=zip;me.man=man;me.n=me.spine.length;
+    if(!coverSrc(l))covFromEpub(zip,man,od,id);
     me.toc=await eToc(me,od);if(VW!==me)return;
     PF={id:id,file:file,kind:'epub'};
     $('#echap').innerHTML=me.toc.map(function(t,i){return '<option value="'+i+'">'+esc(t.label.slice(0,70))+'</option>'}).join('');
@@ -1488,9 +1642,7 @@ Object.assign(ACT,{
   'e-next':function(){if(VW&&VW.kind==='epub'&&VW.ci<VW.n-1){VW.hist=[];eLoad(VW.ci+1)}},
   'e-back':function(){var h=VW&&VW.hist.pop();if(h)eLoad(h.i,{y:h.y})},
   'e-font':function(el){
-    var cur=18;try{cur=Number(localStorage.getItem(EFS))||18}catch(e){}
-    var z=Math.max(14,Math.min(30,cur+Number(el.dataset.d)*2));
-    $('#viewer').style.setProperty('--efs',z+'px');try{localStorage.setItem(EFS,String(z))}catch(e){}
+    efsSet(efsGet()+Number(el.dataset.d)*2);
   }
 });
 document.addEventListener('click',function(e){
@@ -1674,6 +1826,27 @@ Object.assign(ACT,{
 /* ---------- arranque ---------- */
 mount();
 Object.assign(ACT,{
+  'libvista':function(el){V.libVista=el.dataset.v==='list'?'list':'grid';try{localStorage.setItem('hermes-vista-lib',V.libVista)}catch(e){}mountLibros()},
+  'buscar-libro':async function(){
+    var box=$('#l-res');if(!box||!EL)return;
+    var q=[$('#l-titulo').value.trim(),$('#l-autor').value.trim()||$('#l-apellido').value.trim()].filter(Boolean).join(' ');
+    if(!q){box.innerHTML='<p class="sub">Escribe primero el título del libro.</p>';return}
+    box.innerHTML='<p class="sub">Buscando en la web…</p>';
+    var r=await buscarLibros(q);if(!$('#l-res')||!EL)return;
+    EL.res=r;$('#l-res').innerHTML=r.length||navigator.onLine?bresHtml(r):'<p class="sub">Sin conexión. Conéctate para buscar.</p>';
+  },
+  'bres-todo':function(el){
+    var it=EL&&EL.res&&EL.res[Number(el.dataset.i)];if(!it)return;
+    $('#l-titulo').value=it.titulo;if(it.apellido)$('#l-apellido').value=it.apellido;if(it.anio)$('#l-anio').value=it.anio;
+    if(it.autor)$('#l-autor').value=it.autor;if(it.editorial)$('#l-editorial').value=it.editorial;
+    if(it.portada)EL.d.portada=it.portada;$('#l-cov').innerHTML=coverHtml(EL.d,'','width:76px');
+    $('#l-res').innerHTML='';toast('Datos completados. Revísalos y guarda.');
+  },
+  'bres-portada':function(el){
+    var it=EL&&EL.res&&EL.res[Number(el.dataset.i)];if(!it||!it.portada)return;
+    EL.d.portada=it.portada;$('#l-cov').innerHTML=coverHtml(EL.d,'','width:76px');$('#l-res').innerHTML='';toast('Portada elegida. Guarda el libro.');
+  },
+  'portada-quitar':function(){if(!EL)return;EL.d.portada='';$('#l-cov').innerHTML=coverHtml(EL.d,'','width:76px');toast('Portada quitada. Guarda el libro.')},
   'sync-save':function(){
     var u=($('#sy-url').value||'').trim(),k=($('#sy-key').value||'').trim();
     if(!/^https:\/\/script\.google\.com\/.+\/exec$/.test(u)){toast('El enlace debe terminar en /exec');return}
@@ -1685,6 +1858,9 @@ Object.assign(ACT,{
   'sync-off':function(){SY.url='';SY.clave='';SY.desde=0;SY.pend={};SY.last='';syStore();toast('Desconectado');scheduleRender()}
 });
 if(SY.url)setTimeout(function(){syncNow(false)},1500);
+async function pollTexto(){if(!NAT)return;try{var r=await natCall('textoPendiente',{});if(r&&r.texto)textoExterno(r.texto)}catch(e){}}
+if(NAT){setTimeout(pollTexto,1300);window.addEventListener('textoExterno',pollTexto);document.addEventListener('visibilitychange',function(){if(!document.hidden)pollTexto()})}
+try{var _sp=new URLSearchParams(location.search),_st=_sp.get('text')||_sp.get('title');if(_st){history.replaceState(null,'',location.pathname);setTimeout(function(){textoExterno(_st)},1000)}}catch(e){}
 document.addEventListener('visibilitychange',function(){if(!document.hidden)syncNow(false)});
 window.addEventListener('online',function(){syncNow(false)});
 setInterval(function(){if(!document.hidden)syncNow(false)},90000);
